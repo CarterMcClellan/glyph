@@ -9,6 +9,7 @@
     "package:mac": "electron-packager . Glyph --platform=darwin --arch=arm64 --out=dist --overwrite --no-asar --app-bundle-id=com.glyph.desktop --app-version=0.3.0 --ignore='^/dist$' --ignore='^/\\.glyph$'"
   },
   "dependencies": {
+    "lottie-web": "^5.13.0",
     "three": "^0.179.1"
   },
   "devDependencies": {

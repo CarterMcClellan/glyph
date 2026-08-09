@@ -99,11 +99,21 @@ class ProjectStore:
             state["source"]["active_id"] = source_id
             return self._write(state)
 
-    def import_source(self, source: str, prompt: str = "") -> dict:
+    def import_source(self, source: str, prompt: str = "", origin: str = "import") -> dict:
         path = Path(source).expanduser().resolve()
         if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"} or not path.is_file():
             raise ValueError("Choose an existing PNG, JPEG, or WebP image")
-        return self._add_source(path.read_bytes(), path.suffix, prompt, "import")
+        return self._add_source(path.read_bytes(), path.suffix, prompt, origin)
+
+    def import_source_bytes(self, image_bytes: bytes, filename: str, prompt: str = "", origin: str = "upload") -> dict:
+        suffix = Path(filename).suffix.lower()
+        if suffix not in {".png", ".jpg", ".jpeg", ".webp"}:
+            raise ValueError("Choose a PNG, JPEG, or WebP image")
+        if not image_bytes:
+            raise ValueError("The source image is empty")
+        if len(image_bytes) > 50 * 1024 * 1024:
+            raise ValueError("Source images must be smaller than 50 MB")
+        return self._add_source(image_bytes, suffix, prompt, origin)
 
     def add_generated_source(self, image_bytes: bytes, prompt: str, model: str) -> dict:
         return self._add_source(image_bytes, ".png", prompt, "generated", model)

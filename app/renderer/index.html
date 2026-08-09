@@ -3,14 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-D3sB7fleN0DUBuPnNeLEVM2hj0YfufurW6QHSerDT3Y='; style-src 'self' 'unsafe-inline'; connect-src http://127.0.0.1:47831; img-src 'self' file: data: blob:" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-D3sB7fleN0DUBuPnNeLEVM2hj0YfufurW6QHSerDT3Y='; style-src 'self' 'unsafe-inline'; connect-src 'self' file: http://127.0.0.1:47831; img-src 'self' file: data: blob:" />
     <title>Glyph</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <div id="app">
       <header class="topbar drag-region">
-        <div class="brand no-drag"><span class="brand-mark">◆</span><strong>Glyph</strong></div>
+        <div class="brand no-drag"><strong>Glyph</strong><span class="brand-mark">✧</span><em>Magic Sketchbook Studio</em></div>
         <button id="open-project" class="project-button no-drag">Untitled Object</button>
         <div id="workflow-status" class="workflow-status no-drag" aria-label="Project progress">
           <div id="status-imagine" class="workflow-step active"><span>1</span>Source</div>
@@ -48,7 +48,7 @@
 
         <section class="source-canvas">
           <div class="stage-heading">
-            <div><span class="eyebrow accent-text">Source image</span><h1>Start with the object you want to make 3D.</h1><p>Load one clean image with the full object visible and a simple background.</p></div>
+            <div><span class="eyebrow accent-text">Source image</span><h1 id="source-heading">Start with the object you want to make 3D.</h1><p id="source-subheading">Load one clean image with the full object visible and a simple background.</p></div>
             <span class="model-pill">Local file</span>
           </div>
           <button id="source-preview" class="source-preview empty" type="button" aria-label="Choose source image">
@@ -63,13 +63,11 @@
         </section>
 
         <aside class="imagine-controls panel">
-          <div class="panel-title"><div><span class="eyebrow">Ready check</span><h2>Before you continue</h2></div></div>
+          <div class="panel-title"><div><span class="eyebrow">Quick start</span><h2>Choose a source</h2></div></div>
           <div class="control-content">
-            <div class="source-guidance">
-              <div><span>✓</span><p><strong>One object</strong><small>Avoid overlapping objects and busy scenes.</small></p></div>
-              <div><span>✓</span><p><strong>Complete silhouette</strong><small>Keep the whole object inside the frame.</small></p></div>
-              <div><span>✓</span><p><strong>Clear lighting</strong><small>Even lighting produces cleaner geometry.</small></p></div>
-            </div>
+            <p class="preset-heading">Try one of these transparent examples</p>
+            <div id="source-presets" class="source-presets" aria-label="Bundled source images"></div>
+            <div class="or-divider"><span>or use your own</span></div>
             <button id="import-source" class="primary-button wide">Choose image…</button>
             <div class="auth-explainer">
               <div class="auth-explainer-title"><span>✦</span><strong>ChatGPT powers editing later</strong></div>
@@ -90,27 +88,33 @@
 
         <section class="mesh-canvas">
           <div class="stage-heading">
-            <div><span class="eyebrow accent-text">Mesh</span><h1>Turn the locked image into geometry.</h1><p>TRELLIS reconstructs a mesh from the exact source above.</p></div>
+            <div><span class="eyebrow accent-text">Mesh</span><h1>Turning your image into geometry.</h1><p>TRELLIS is assembling the source into a mesh, one little triangle at a time.</p></div>
             <span id="mesh-job-pill" class="model-pill">Ready</span>
           </div>
           <div class="mesh-preview">
             <img id="mesh-source-ghost" alt="Source being converted" />
             <div class="scan-overlay"></div>
+            <div id="meshify-animation" class="meshify-animation" aria-hidden="true"></div>
+            <canvas id="meshify-canvas" class="meshify-canvas" aria-hidden="true"></canvas>
             <div id="mesh-state-icon" class="mesh-state-icon">⬡</div>
           </div>
           <div class="mesh-progress-card">
-            <div><strong id="mesh-progress-title">Ready to meshify</strong><span id="mesh-progress-percent">0%</span></div>
-            <div class="progress-track"><i id="mesh-progress-bar"></i></div>
-            <p id="mesh-progress-copy">The source is locked. Start TRELLIS when your endpoint is configured.</p>
+            <div class="progress-heading"><strong id="mesh-progress-title">Ready to meshify</strong></div>
+            <div class="progress-meter">
+              <span id="mesh-progress-percent">0%</span>
+              <div class="progress-track"><i id="mesh-progress-bar"><b class="progress-star">✦</b></i></div>
+            </div>
+            <p><span class="progress-note-star">✧</span><span id="mesh-progress-copy">The source is locked. Start TRELLIS when your endpoint is configured.</span></p>
           </div>
         </section>
 
         <aside class="mesh-controls panel">
           <div class="panel-title"><div><span class="eyebrow">Conversion</span><h2>TRELLIS</h2></div></div>
           <div class="control-content">
-            <div class="conversion-step complete"><span>✓</span><div><strong>Source locked</strong><small>Provenance hash recorded</small></div></div>
-            <div id="conversion-upload" class="conversion-step"><span>2</span><div><strong>Upload & reconstruct</strong><small>Generate 3D geometry</small></div></div>
-            <div id="conversion-validate" class="conversion-step"><span>3</span><div><strong>Validate mesh</strong><small>Open in Blender under the hood</small></div></div>
+            <div class="conversion-step complete"><span>✓</span><div><strong>Upload complete</strong><small>Image received and verified</small></div></div>
+            <div class="conversion-step complete"><span>✓</span><div><strong>Analyze complete</strong><small>Features detected and understood</small></div></div>
+            <div id="conversion-upload" class="conversion-step"><span>3</span><div><strong>Reconstructing mesh</strong><small>Building geometry from features</small></div></div>
+            <div id="conversion-validate" class="conversion-step"><span>4</span><div><strong>Optimize</strong><small>Refine topology and prepare the model</small></div></div>
             <button id="start-meshify" class="primary-button wide">Start TRELLIS conversion</button>
             <button id="refresh-meshify" class="secondary-button wide hidden">Refresh job status</button>
             <button id="approve-mesh" class="secondary-button wide">Choose completed GLB to approve</button>
@@ -147,7 +151,7 @@
         </section>
 
         <aside class="right-panel panel">
-          <div class="panel-title"><h2>Model Context</h2><button class="icon-button">⌃</button></div>
+          <div class="panel-title"><h2>Selection sent to Glyph Agent</h2><button class="icon-button">⌃</button></div>
           <section class="context-section"><h3>Selection sent to model</h3><div id="selection-preview" class="selection-preview"><span>Select a mesh and click faces</span></div><div class="chips"><span id="object-chip" class="chip accent">No mesh</span><span id="face-chip" class="chip">0 faces</span><span id="vertex-chip" class="chip">0 vertices</span></div><button id="clear-selection" class="text-button">Clear face selection</button></section>
           <section class="context-section"><h3>Included context</h3><label class="context-row"><input type="checkbox" checked /><span class="context-icon">◇</span><span><strong>Selected topology</strong><small>Exact face and vertex indices</small></span></label><label class="context-row"><input type="checkbox" checked /><span class="context-icon">⬡</span><span><strong>Same object</strong><small>Bounds and topology counts</small></span></label><label class="context-row"><input type="checkbox" checked /><span class="context-icon">▱</span><span><strong>Scene orientation</strong><small>Units and world transform</small></span></label></section>
           <section class="context-section harness-section"><div class="section-heading"><h3>Harness activity</h3><span id="harness-status" class="status-dot idle"></span></div><div id="harness-steps" class="harness-steps"><p>No run yet.</p></div></section>
@@ -185,6 +189,7 @@
         }
       }
     </script>
+    <script src="../../node_modules/lottie-web/build/player/lottie_light.min.js"></script>
     <script type="module" src="app.js"></script>
   </body>
 </html>

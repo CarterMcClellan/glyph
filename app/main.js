@@ -1,14 +1,79 @@
 const { app, BrowserWindow, dialog, ipcMain } = require("electron");
 const { spawn } = require("child_process");
 const path = require("path");
-const http = require("http");
 const fs = require("fs");
 const crypto = require("crypto");
 
 const API_PORT = 47831;
-const API_TOKEN = crypto.randomBytes(32).toString("hex");
-process.env.GLYPH_API_TOKEN = API_TOKEN;
+const LOCAL_API_TOKEN = crypto.randomBytes(32).toString("hex");
+let apiBase = `http://127.0.0.1:${API_PORT}`;
+let apiToken = LOCAL_API_TOKEN;
+let usesExternalBackend = false;
 let apiProcess = null;
+
+function loadBackendConfiguration() {
+  const configPath = path.join(app.getPath("userData"), "backend.json");
+  let fileConfig = {};
+  try {
+    fileConfig = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  } catch (_error) {
+    fileConfig = {};
+  }
+  const configuredBase = process.env.GLYPH_API_BASE || fileConfig.api_base;
+  const configuredToken = process.env.GLYPH_API_TOKEN || fileConfig.api_token;
+  if (configuredBase) {
+    const parsed = new URL(configuredBase);
+    if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error("Glyph backend must use HTTP or HTTPS");
+    if (!configuredToken) throw new Error("Glyph backend token is missing");
+    apiBase = configuredBase.replace(/\/$/, "");
+    apiToken = configuredToken;
+    usesExternalBackend = true;
+  }
+  process.env.GLYPH_API_BASE = apiBase;
+  process.env.GLYPH_API_TOKEN = apiToken;
+}
+
+async function requestBackend(pathname, options = {}) {
+  if (!String(pathname).startsWith("/api/")) throw new Error("Glyph API paths must begin with /api/");
+  const response = await fetch(`${apiBase}${pathname}`, {
+    method: options.method || "GET",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${apiToken}`,
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+    },
+    body: options.body || undefined,
+  });
+  const text = await response.text();
+  let value;
+  try {
+    value = text ? JSON.parse(text) : {};
+  } catch (_error) {
+    throw new Error(`Glyph backend returned invalid JSON (${response.status})`);
+  }
+  if (!response.ok) throw new Error(value.error || `Glyph backend request failed (${response.status})`);
+  return value;
+}
+
+async function uploadSourceFile(filePath, prompt = "", origin = "upload") {
+  const extension = path.extname(filePath).toLowerCase();
+  if (![".png", ".jpg", ".jpeg", ".webp"].includes(extension)) {
+    throw new Error("Choose a PNG, JPEG, or WebP image");
+  }
+  const data = fs.readFileSync(filePath);
+  if (data.length > 50 * 1024 * 1024) throw new Error("Source images must be smaller than 50 MB");
+  const project = await requestBackend("/api/source/upload", {
+    method: "POST",
+    body: JSON.stringify({
+      filename: path.basename(filePath),
+      base64: data.toString("base64"),
+      prompt,
+      origin,
+    }),
+  });
+  const source = project.source?.versions?.find((item) => item.id === project.source.active_id);
+  return { project, source_id: source?.id || null, preview_url: `data:image/${extension === ".jpg" || extension === ".jpeg" ? "jpeg" : extension.slice(1)};base64,${data.toString("base64")}` };
+}
 
 function projectRoot() {
   return app.getAppPath();
@@ -43,7 +108,7 @@ function harnessEnvironment() {
     "/usr/local/bin",
     process.env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin",
   ].join(":");
-  return { ...process.env, GLYPH_API_TOKEN: API_TOKEN, PATH: searchPath, PYTHONUNBUFFERED: "1" };
+  return { ...process.env, GLYPH_API_TOKEN: apiToken, PATH: searchPath, PYTHONUNBUFFERED: "1" };
 }
 
 function startHarness() {
@@ -64,24 +129,11 @@ function startHarness() {
   });
 }
 
-function waitForHarness(attempts = 80) {
+function waitForBackend(attempts = 80) {
   return new Promise((resolve, reject) => {
-    const check = () => {
-      const request = http.get({
-        hostname: "127.0.0.1",
-        port: API_PORT,
-        path: "/api/health",
-        headers: { Authorization: `Bearer ${API_TOKEN}` },
-      }, (response) => {
-        response.resume();
-        if (response.statusCode === 200) resolve();
-        else retry();
-      });
-      request.on("error", retry);
-      request.setTimeout(500, () => request.destroy());
-    };
+    const check = () => requestBackend("/api/health").then(resolve).catch(retry);
     const retry = () => {
-      if (--attempts <= 0) reject(new Error("Glyph harness did not start"));
+      if (--attempts <= 0) reject(new Error(`Glyph backend did not respond at ${apiBase}`));
       else setTimeout(check, 150);
     };
     check();
@@ -108,9 +160,16 @@ async function createWindow() {
   window.webContents.on("did-fail-load", (_event, code, description) => {
     console.error(`[renderer] load failed ${code}: ${description}`);
   });
-  await waitForHarness();
+  await waitForBackend();
   await window.loadFile(path.join(__dirname, "renderer", "index.html"));
 }
+
+ipcMain.handle("glyph-api", (_event, pathname, options) => requestBackend(pathname, options));
+ipcMain.handle("glyph-import-source", (_event, source) => uploadSourceFile(source.path, source.prompt, source.origin));
+ipcMain.handle("glyph-import-preset", (_event, preset) => {
+  const presetPath = path.join(projectRoot(), "app", "assets", "source-presets", preset.filename);
+  return uploadSourceFile(presetPath, `Built-in source: ${preset.label}`, `preset:${preset.id}`);
+});
 
 ipcMain.handle("choose-blend", async () => {
   const result = await dialog.showOpenDialog({
@@ -149,8 +208,9 @@ ipcMain.handle("choose-mesh", async () => {
 });
 
 app.whenReady().then(async () => {
-  startHarness();
   try {
+    loadBackendConfiguration();
+    if (!usesExternalBackend) startHarness();
     await createWindow();
   } catch (error) {
     dialog.showErrorBox("Glyph could not start", error.message);

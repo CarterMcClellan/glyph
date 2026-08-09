@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -15,44 +16,15 @@ from urllib.parse import urlparse
 from .blender_client import BlenderClient
 from .harness import AgentHarness
 from .project_store import ProjectStore
+from .source_presets import public_source_presets, source_preset
+from .trellis_adapter import EXPECTED_RESPONSE, MODEL_SERVER, public_trellis_contract, value_at_paths
 from .trellis_client import TrellisClient
 from blender_ai_editor.planner import codex_auth_status, resolve_codex_executable
 
 
-SOURCE_PRESETS = [
-    {
-        "id": "single-object",
-        "label": "Single object",
-        "description": "A centered object with a clean silhouette and minimal occlusion.",
-        "prompt": "A single centered object, fully visible, clean silhouette, neutral studio background",
-        "recommended_aspect_ratio": "1:1",
-    },
-    {
-        "id": "hard-surface",
-        "label": "Hard surface",
-        "description": "Products, props, vehicles, and other objects with manufactured edges.",
-        "prompt": "A single hard-surface object, three-quarter view, sharp details, neutral studio background",
-        "recommended_aspect_ratio": "1:1",
-    },
-    {
-        "id": "character",
-        "label": "Character",
-        "description": "A complete character with separated limbs and an unobstructed pose.",
-        "prompt": "A single full-body character, neutral pose, separated limbs, fully visible, plain background",
-        "recommended_aspect_ratio": "3:4",
-    },
-    {
-        "id": "organic",
-        "label": "Organic form",
-        "description": "Creatures, plants, food, and other rounded or irregular forms.",
-        "prompt": "A single organic object, three-quarter view, fully visible, soft studio lighting, plain background",
-        "recommended_aspect_ratio": "1:1",
-    },
-]
-
-
 class GlyphService:
     def __init__(self, project_root: Path, workspace: Path):
+        self.project_root = project_root
         self.workspace = workspace
         self.workspace.mkdir(parents=True, exist_ok=True)
         self.settings_path = workspace / "settings.json"
@@ -67,7 +39,7 @@ class GlyphService:
             "planner": "CODEX",
             "model": "gpt-5.6-sol",
             "codex_executable": "codex",
-            "trellis_endpoint": os.environ.get("GLYPH_TRELLIS_ENDPOINT", ""),
+            "trellis_endpoint": os.environ.get("GLYPH_TRELLIS_ENDPOINT", MODEL_SERVER["base_url"]),
             "trellis_api_token": os.environ.get("GLYPH_TRELLIS_API_TOKEN", ""),
         }
         if self.settings_path.is_file():
@@ -102,7 +74,7 @@ class GlyphService:
         )
 
     def trellis_contract(self) -> dict:
-        return {
+        contract = {
             "version": 1,
             "service": "trellis",
             "configured": bool(self.settings.get("trellis_endpoint")),
@@ -134,10 +106,12 @@ class GlyphService:
                 "mesh_output_keys": ["glb_url", "mesh_url", "output_url", "glb_path", "mesh_path", "output", "outputs", "result"],
             },
         }
+        contract.update(public_trellis_contract(self.settings.get("trellis_endpoint", "")))
+        return contract
 
     @staticmethod
     def source_presets() -> dict:
-        return {"version": 1, "presets": SOURCE_PRESETS}
+        return {"version": 1, "presets": public_source_presets()}
 
     def chatgpt_auth(self) -> dict:
         return codex_auth_status(self.settings.get("codex_executable", "codex"))
@@ -169,6 +143,17 @@ class GlyphService:
     def scene(self) -> dict:
         return self.blender.scene()
 
+    def import_source_preset(self, preset_id: str) -> dict:
+        preset = source_preset(preset_id)
+        path = self.project_root / "app" / "assets" / "source-presets" / preset["filename"]
+        if not path.is_file():
+            raise RuntimeError("The bundled source preset is missing")
+        return self.project.import_source(
+            str(path),
+            f"Built-in source: {preset['label']}",
+            f"preset:{preset['id']}",
+        )
+
     def preview(self, payload: dict) -> dict:
         result = self.harness.preview(
             payload.get("instruction", ""),
@@ -197,10 +182,11 @@ class GlyphService:
         if state["stage"] != "MESH" or not locked:
             raise RuntimeError("Lock the source before starting TRELLIS")
         response = self.trellis_client().meshify(locked)
+        response_fields = EXPECTED_RESPONSE["fields"]
         job = {
             **response,
-            "job_id": response.get("job_id") or response.get("id"),
-            "status": response.get("status", "queued"),
+            "job_id": value_at_paths(response, response_fields["job_id"]),
+            "status": value_at_paths(response, response_fields["status"]) or "queued",
         }
         if not job["job_id"]:
             raise RuntimeError("TRELLIS did not return a job id")
@@ -209,7 +195,8 @@ class GlyphService:
 
     def mesh_job_status(self, job_id: str) -> dict:
         job = self.trellis_client().status(job_id)
-        job = {**job, "job_id": job.get("job_id") or job.get("id") or job_id}
+        parsed_id = value_at_paths(job, EXPECTED_RESPONSE["fields"]["job_id"])
+        job = {**job, "job_id": parsed_id or job_id}
         self.project.update_mesh_job(job)
         return job
 
@@ -241,6 +228,9 @@ class GlyphService:
 
     @staticmethod
     def _mesh_output(job: dict) -> str | None:
+        configured = value_at_paths(job, EXPECTED_RESPONSE["fields"]["mesh_output"])
+        if isinstance(configured, str):
+            return configured
         for key in ("glb_url", "mesh_url", "output_url", "glb_path", "mesh_path"):
             if isinstance(job.get(key), str):
                 return job[key]
@@ -307,6 +297,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(self.service.project.fork_project())
             elif path == "/api/source/import":
                 self._json(self.service.project.import_source(payload.get("path", ""), payload.get("prompt", "")), 201)
+            elif path == "/api/source/upload":
+                encoded = payload.get("base64", "")
+                try:
+                    image_bytes = base64.b64decode(encoded, validate=True)
+                except (ValueError, TypeError) as exc:
+                    raise ValueError("Source image is not valid base64") from exc
+                self._json(
+                    self.service.project.import_source_bytes(
+                        image_bytes,
+                        payload.get("filename", "source.png"),
+                        payload.get("prompt", ""),
+                        payload.get("origin", "upload"),
+                    ),
+                    201,
+                )
+            elif path == "/api/source/preset":
+                self._json(self.service.import_source_preset(payload.get("preset_id", "")), 201)
             elif path == "/api/source/active":
                 self._json(self.service.project.set_active_source(payload.get("source_id", "")))
             elif path == "/api/source/lock":

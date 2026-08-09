@@ -3,6 +3,7 @@ import tempfile
 import unittest
 
 from glyph_harness.project_store import ProjectStore
+from glyph_harness.server import GlyphService
 
 
 class ProjectWorkflowTests(unittest.TestCase):
@@ -48,6 +49,34 @@ class ProjectWorkflowTests(unittest.TestCase):
         state = self.store.approve_mesh(str(mesh))
         self.assertEqual(state["stage"], "EDIT")
         self.assertTrue(Path(state["mesh"]["approved"]["path"]).is_file())
+
+    def test_bundled_preset_origin_is_preserved(self):
+        state = self.store.import_source(
+            str(self.image),
+            "Built-in source: Voxel Apprentice",
+            "preset:voxel-apprentice",
+        )
+        self.assertEqual(state["source"]["versions"][0]["origin"], "preset:voxel-apprentice")
+
+    def test_source_bytes_can_cross_a_remote_api_boundary(self):
+        state = self.store.import_source_bytes(
+            b"uploaded-image-bytes",
+            "wizard.webp",
+            "A remote upload",
+            "upload",
+        )
+        source = state["source"]["versions"][0]
+        self.assertEqual(Path(source["path"]).suffix, ".webp")
+        self.assertEqual(source["origin"], "upload")
+        self.assertEqual(source["prompt"], "A remote upload")
+
+    def test_service_imports_bundled_source_preset(self):
+        project_root = Path(__file__).resolve().parents[1]
+        service = GlyphService(project_root, self.root / "service-workspace")
+        state = service.import_source_preset("arcane-mage")
+        source = state["source"]["versions"][0]
+        self.assertEqual(source["origin"], "preset:arcane-mage")
+        self.assertTrue(Path(source["path"]).is_file())
 
 
 if __name__ == "__main__":

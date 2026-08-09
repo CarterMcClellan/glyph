@@ -8,6 +8,8 @@ import mimetypes
 from pathlib import Path
 from urllib import error, parse, request
 
+from .trellis_adapter import MODEL_SERVER
+
 
 class TrellisClient:
     def __init__(self, endpoint: str, api_token: str = ""):
@@ -24,10 +26,11 @@ class TrellisClient:
             "reference_images": references,
             "requested_outputs": ["replacement.glb", "provenance.json", "validation.json"],
         }
-        return self._request("POST", "/jobs", payload)
+        return self._request("POST", MODEL_SERVER["create_job_path"], payload)
 
     def status(self, job_id: str) -> dict:
-        return self._request("GET", f"/jobs/{parse.quote(job_id)}")
+        path = MODEL_SERVER["status_path"].format(job_id=parse.quote(job_id))
+        return self._request("GET", path)
 
     def meshify(self, locked_source: dict) -> dict:
         if not self.endpoint:
@@ -48,7 +51,7 @@ class TrellisClient:
             },
             "requested_outputs": ["mesh.glb", "provenance.json", "validation.json"],
         }
-        return self._request("POST", "/jobs", payload)
+        return self._request("POST", MODEL_SERVER["create_job_path"], payload)
 
     def _request(self, method: str, path: str, payload: dict | None = None) -> dict:
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
@@ -62,7 +65,7 @@ class TrellisClient:
             headers=headers,
         )
         try:
-            with request.urlopen(req, timeout=60) as response:
+            with request.urlopen(req, timeout=MODEL_SERVER["timeout_seconds"]) as response:
                 return json.loads(response.read().decode("utf-8"))
         except error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")

@@ -5,6 +5,7 @@ import threading
 import unittest
 
 from glyph_harness.harness import AgentHarness
+from glyph_harness.trellis_adapter import public_trellis_contract, value_at_paths
 from glyph_harness.trellis_client import TrellisClient
 
 
@@ -91,6 +92,16 @@ class TrellisClientTests(unittest.TestCase):
             thread.join()
             server.server_close()
         self.assertEqual(_TrellisHandler.last_authorization, "Bearer secret-token")
+
+    def test_public_contract_defines_frontend_parse_paths(self):
+        contract = public_trellis_contract("https://trellis.test")
+        self.assertEqual(contract["server"]["base_url"], "https://trellis.test")
+        self.assertIn("output.mesh_url", contract["response"]["fields"]["mesh_output"])
+        payload = {"output": {"mesh_url": "https://trellis.test/mesh.glb"}}
+        self.assertEqual(
+            value_at_paths(payload, contract["response"]["fields"]["mesh_output"]),
+            "https://trellis.test/mesh.glb",
+        )
 
 
 if __name__ == "__main__":

@@ -1,8 +1,13 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-const API = window.glyphDesktop.apiBase;
-const API_TOKEN = window.glyphDesktop.apiToken;
+const BUNDLED_SOURCE_PRESETS = [
+  { id: "voxel-apprentice", label: "Voxel Apprentice", description: "Chunky 3D style", filename: "voxel-apprentice.png", asset: "../assets/source-presets/voxel-apprentice.png" },
+  { id: "illustrated-apprentice", label: "Storybook Apprentice", description: "Clean illustrated style", filename: "illustrated-apprentice.png", asset: "../assets/source-presets/illustrated-apprentice.png" },
+  { id: "voxel-elder", label: "Voxel Elder", description: "Tall block-built style", filename: "voxel-elder.png", asset: "../assets/source-presets/voxel-elder.png" },
+  { id: "arcane-mage", label: "Arcane Mage", description: "Detailed fantasy style", filename: "arcane-mage.png", asset: "../assets/source-presets/arcane-mage.png" },
+];
+
 const state = {
   project: null,
   scene: null,
@@ -13,6 +18,9 @@ const state = {
   context: null,
   settings: {},
   auth: { available: false, signed_in: false },
+  sourcePresets: [],
+  sourcePreview: null,
+  trellisContract: null,
   viewMode: "lit",
   sceneCollapsed: false,
 };
@@ -26,13 +34,13 @@ const elements = Object.fromEntries(
     "settings-dialog", "model-setting", "trellis-endpoint", "save-settings", "send-trellis",
     "trellis-status", "toast", "select-tool", "move-tool", "view-mesh", "view-render", "view-lit",
     "imagine-workspace", "mesh-workspace", "workflow-status", "status-imagine", "status-mesh", "status-edit",
-    "editor-toolbar", "viewport-modes", "fork-project", "source-preview", "source-image",
-    "source-placeholder", "import-source", "replace-source", "lock-source", "source-ready-title", "source-ready-copy",
+    "editor-toolbar", "viewport-modes", "fork-project", "source-preview", "source-image", "source-heading", "source-subheading",
+    "source-placeholder", "source-presets", "import-source", "replace-source", "lock-source", "source-ready-title", "source-ready-copy",
     "lock-dialog", "lock-confirmation", "chatgpt-auth", "chatgpt-auth-label", "settings-auth-card",
     "settings-auth-title", "settings-auth-detail", "settings-sign-in",
     "confirm-lock", "locked-source-image", "locked-source-version", "locked-source-hash", "locked-source-prompt",
     "mesh-source-ghost", "mesh-job-pill", "mesh-progress-title", "mesh-progress-percent", "mesh-progress-bar",
-    "mesh-progress-copy", "mesh-state-icon", "conversion-upload", "conversion-validate", "start-meshify",
+    "mesh-progress-copy", "mesh-state-icon", "meshify-animation", "meshify-canvas", "conversion-upload", "conversion-validate", "start-meshify",
     "refresh-meshify", "approve-mesh",
   ].map((id) => [id.replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase()), document.getElementById(id)])
 );
@@ -45,21 +53,28 @@ let meshRoot;
 let raycaster;
 let pointer;
 let pointerDown;
+let meshifyLottie;
+const meshifyVisual = {
+  context: null,
+  image: null,
+  source: "",
+  meshLayer: null,
+  effectLayer: null,
+  rect: null,
+  width: 0,
+  height: 0,
+  progress: 0,
+  status: "ready",
+};
 const meshViews = new Map();
 
 async function api(path, options = {}) {
-  const response = await fetch(`${API}${path}`, {
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${API_TOKEN}`, ...(options.headers || {}) },
-    ...options,
-  });
-  const value = await response.json();
-  if (!response.ok) throw new Error(value.error || `Request failed (${response.status})`);
-  return value;
+  return window.glyphDesktop.api(path, { method: options.method || "GET", body: options.body });
 }
 
 function initViewport() {
   threeScene = new THREE.Scene();
-  threeScene.background = new THREE.Color(0x24282b);
+  threeScene.background = new THREE.Color(0xf3f0fb);
   camera = new THREE.PerspectiveCamera(38, 1, 0.01, 5000);
   camera.position.set(3.8, 2.8, 4.8);
   renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -76,16 +91,16 @@ function initViewport() {
   meshRoot.rotation.x = -Math.PI / 2;
   threeScene.add(meshRoot);
 
-  const hemisphere = new THREE.HemisphereLight(0xffffff, 0x232a31, 2.1);
+  const hemisphere = new THREE.HemisphereLight(0xffffff, 0xd9d0ec, 2.25);
   threeScene.add(hemisphere);
   const key = new THREE.DirectionalLight(0xffffff, 2.5);
   key.position.set(4, 7, 5);
   threeScene.add(key);
-  const rim = new THREE.DirectionalLight(0x6da7ff, 1.2);
+  const rim = new THREE.DirectionalLight(0x8b7be8, 1.15);
   rim.position.set(-5, 2, -4);
   threeScene.add(rim);
-  const grid = new THREE.GridHelper(30, 30, 0x56606a, 0x343a40);
-  grid.material.opacity = 0.35;
+  const grid = new THREE.GridHelper(30, 30, 0x9a8ed8, 0xd8d0e8);
+  grid.material.opacity = 0.42;
   grid.material.transparent = true;
   grid.position.y = -1.6;
   threeScene.add(grid);
@@ -100,6 +115,233 @@ function initViewport() {
   window.addEventListener("resize", resizeViewport);
   resizeViewport();
   animate();
+}
+
+function initMeshifyAnimation() {
+  if (meshifyLottie || !elements.meshifyAnimation || !window.lottie) return;
+  try {
+    meshifyLottie = window.lottie.loadAnimation({
+      container: elements.meshifyAnimation,
+      renderer: "svg",
+      loop: true,
+      autoplay: true,
+      path: new URL("../assets/animations/meshify-magic.json", import.meta.url).href,
+      rendererSettings: { preserveAspectRatio: "xMidYMid meet", progressiveLoad: true },
+    });
+    meshifyLottie.setSpeed(0.78);
+    meshifyLottie.addEventListener("DOMLoaded", () => {
+      elements.meshStateIcon.parentElement.classList.add("lottie-ready");
+    });
+    meshifyLottie.addEventListener("data_failed", () => {
+      elements.meshStateIcon.parentElement.classList.remove("lottie-ready");
+    });
+  } catch (_error) {
+    meshifyLottie = null;
+  }
+}
+
+function meshNoise(column, row) {
+  const value = Math.sin(column * 91.173 + row * 47.719) * 43758.5453;
+  return value - Math.floor(value);
+}
+
+function drawMagicStar(context, x, y, radius, color, rotation = 0) {
+  context.save();
+  context.translate(x, y);
+  context.rotate(rotation);
+  context.beginPath();
+  for (let index = 0; index < 8; index += 1) {
+    const angle = -Math.PI / 2 + (index * Math.PI) / 4;
+    const length = index % 2 === 0 ? radius : radius * 0.25;
+    context.lineTo(Math.cos(angle) * length, Math.sin(angle) * length);
+  }
+  context.closePath();
+  context.fillStyle = color;
+  context.fill();
+  context.restore();
+}
+
+function rebuildMeshifyLayers() {
+  const canvas = elements.meshifyCanvas;
+  const image = meshifyVisual.image;
+  if (!canvas || !image?.naturalWidth) return;
+  const parent = canvas.parentElement;
+  const width = parent.clientWidth;
+  const height = parent.clientHeight;
+  if (!width || !height) return;
+  const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(width * pixelRatio);
+  canvas.height = Math.round(height * pixelRatio);
+  meshifyVisual.context = canvas.getContext("2d");
+  meshifyVisual.context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+  meshifyVisual.width = width;
+  meshifyVisual.height = height;
+
+  const scale = Math.min((width * 0.82) / image.naturalWidth, (height * 0.98) / image.naturalHeight);
+  const drawWidth = image.naturalWidth * scale;
+  const drawHeight = image.naturalHeight * scale;
+  const x = (width - drawWidth) / 2;
+  const y = (height - drawHeight) / 2 + height * 0.015;
+  meshifyVisual.rect = { x, y, width: drawWidth, height: drawHeight };
+
+  const meshLayer = document.createElement("canvas");
+  meshLayer.width = Math.ceil(width);
+  meshLayer.height = Math.ceil(height);
+  const meshContext = meshLayer.getContext("2d");
+  meshContext.drawImage(image, x, y, drawWidth, drawHeight);
+  meshContext.globalCompositeOperation = "source-in";
+  meshContext.fillStyle = "rgba(246, 242, 255, 0.96)";
+  meshContext.fillRect(x, y, drawWidth, drawHeight);
+  meshContext.globalCompositeOperation = "source-over";
+
+  const columns = 11;
+  const rows = Math.max(12, Math.round(columns * drawHeight / Math.max(drawWidth, 1)));
+  const stepX = drawWidth / columns;
+  const stepY = drawHeight / rows;
+  const points = [];
+  for (let row = 0; row <= rows; row += 1) {
+    const line = [];
+    for (let column = 0; column <= columns; column += 1) {
+      const edge = column === 0 || column === columns || row === 0 || row === rows;
+      const jitterX = edge ? 0 : (meshNoise(column, row) - 0.5) * stepX * 0.48;
+      const jitterY = edge ? 0 : (meshNoise(row + 17, column + 29) - 0.5) * stepY * 0.48;
+      line.push({ x: x + column * stepX + jitterX, y: y + row * stepY + jitterY });
+    }
+    points.push(line);
+  }
+  meshContext.lineJoin = "round";
+  meshContext.lineCap = "round";
+  for (let row = 0; row < rows; row += 1) {
+    for (let column = 0; column < columns; column += 1) {
+      const a = points[row][column];
+      const b = points[row][column + 1];
+      const c = points[row + 1][column + 1];
+      const d = points[row + 1][column];
+      const diagonalForward = (row + column) % 2 === 0;
+      const triangles = diagonalForward ? [[a, b, c], [a, c, d]] : [[a, b, d], [b, c, d]];
+      for (const triangle of triangles) {
+        meshContext.beginPath();
+        meshContext.moveTo(triangle[0].x, triangle[0].y);
+        meshContext.lineTo(triangle[1].x, triangle[1].y);
+        meshContext.lineTo(triangle[2].x, triangle[2].y);
+        meshContext.closePath();
+        meshContext.fillStyle = (row + column) % 3 === 0 ? "rgba(126, 105, 218, 0.105)" : "rgba(126, 105, 218, 0.035)";
+        meshContext.fill();
+        meshContext.strokeStyle = "rgba(100, 78, 191, 0.82)";
+        meshContext.lineWidth = 1.15;
+        meshContext.stroke();
+      }
+    }
+  }
+  meshContext.globalCompositeOperation = "destination-in";
+  meshContext.drawImage(image, x, y, drawWidth, drawHeight);
+  meshContext.globalCompositeOperation = "source-over";
+  meshifyVisual.meshLayer = meshLayer;
+
+  const effectLayer = document.createElement("canvas");
+  effectLayer.width = Math.ceil(width);
+  effectLayer.height = Math.ceil(height);
+  meshifyVisual.effectLayer = effectLayer;
+  parent.classList.add("canvas-ready");
+}
+
+function setMeshifyCanvasSource(source) {
+  if (!source || meshifyVisual.source === source) return;
+  meshifyVisual.source = source;
+  const image = new Image();
+  image.addEventListener("load", () => {
+    meshifyVisual.image = image;
+    rebuildMeshifyLayers();
+  }, { once: true });
+  image.addEventListener("error", () => {
+    elements.meshifyCanvas?.parentElement.classList.remove("canvas-ready");
+  }, { once: true });
+  image.src = source;
+}
+
+function renderMeshifyFrame(time) {
+  const { context, image, meshLayer, effectLayer, rect, width, height } = meshifyVisual;
+  if (!context || !image || !meshLayer || !effectLayer || !rect) return;
+  context.clearRect(0, 0, width, height);
+  const seconds = time / 1000;
+  const running = meshifyVisual.status === "running";
+  const complete = meshifyVisual.status === "complete";
+  const failed = meshifyVisual.status === "failed";
+  const progressRatio = Math.max(0, Math.min(1, meshifyVisual.progress / 100));
+  const baseSplit = complete ? 0.2 : running ? 0.31 + progressRatio * 0.47 : 0.55;
+  const shimmer = failed ? 0 : Math.sin(seconds * 1.55) * (running ? 0.022 : 0.012);
+  const split = rect.x + rect.width * Math.max(0.16, Math.min(0.82, baseSplit + shimmer));
+
+  context.save();
+  context.translate(rect.x + rect.width / 2, rect.y + rect.height / 2);
+  context.scale(1.18, 0.72);
+  const halo = context.createRadialGradient(0, 0, 8, 0, 0, rect.height * 0.62);
+  halo.addColorStop(0, "rgba(255, 255, 255, 0.82)");
+  halo.addColorStop(0.48, "rgba(226, 217, 250, 0.38)");
+  halo.addColorStop(1, "rgba(226, 217, 250, 0)");
+  context.fillStyle = halo;
+  context.beginPath();
+  context.arc(0, 0, rect.height * 0.62, 0, Math.PI * 2);
+  context.fill();
+  context.restore();
+
+  context.save();
+  context.beginPath();
+  context.rect(0, 0, split + 3, height);
+  context.clip();
+  context.globalAlpha = failed ? 0.48 : 1;
+  context.drawImage(image, rect.x, rect.y, rect.width, rect.height);
+  context.restore();
+
+  context.save();
+  context.beginPath();
+  context.rect(split - 3, 0, width - split + 3, height);
+  context.clip();
+  context.globalAlpha = failed ? 0.35 : complete ? 0.9 : 1;
+  context.drawImage(meshLayer, 0, 0);
+  context.restore();
+
+  const effectContext = effectLayer.getContext("2d");
+  effectContext.clearRect(0, 0, width, height);
+  const pulse = 0.72 + Math.sin(seconds * 3.2) * 0.22;
+  effectContext.save();
+  effectContext.shadowColor = "rgba(113, 86, 221, 0.72)";
+  effectContext.shadowBlur = 13;
+  effectContext.strokeStyle = `rgba(105, 79, 211, ${pulse})`;
+  effectContext.lineWidth = running ? 4 : 2.5;
+  effectContext.setLineDash([12, 7]);
+  effectContext.lineDashOffset = -seconds * 28;
+  effectContext.beginPath();
+  effectContext.moveTo(split, rect.y + 2);
+  effectContext.lineTo(split, rect.y + rect.height - 2);
+  effectContext.stroke();
+  effectContext.restore();
+  effectContext.globalCompositeOperation = "destination-in";
+  effectContext.drawImage(image, rect.x, rect.y, rect.width, rect.height);
+  effectContext.globalCompositeOperation = "source-over";
+  context.drawImage(effectLayer, 0, 0);
+
+  if (!failed) {
+    const starDrift = Math.sin(seconds * 2.1) * 8;
+    const twinkle = 0.72 + Math.sin(seconds * 2.8) * 0.2;
+    drawMagicStar(context, split + 17, rect.y + rect.height * 0.29 + starDrift, 13, "rgba(244, 157, 73, 0.95)", seconds * 0.5);
+    drawMagicStar(context, split + 31, rect.y + rect.height * 0.7 - starDrift, 8, "rgba(82, 183, 177, 0.9)", -seconds * 0.7);
+    drawMagicStar(context, rect.x - 17, rect.y + rect.height * 0.24 - starDrift * 0.35, 7, `rgba(235, 112, 143, ${twinkle})`, -seconds * 0.35);
+    drawMagicStar(context, rect.x + rect.width + 22, rect.y + rect.height * 0.19 + starDrift * 0.3, 10, `rgba(235, 112, 143, ${0.82 - Math.sin(seconds * 2.3) * 0.14})`, seconds * 0.32);
+    drawMagicStar(context, rect.x + rect.width + 12, rect.y + rect.height * 0.55 + starDrift * 0.5, 6, `rgba(126, 105, 218, ${twinkle})`, seconds * 0.8);
+    drawMagicStar(context, rect.x - 8, rect.y + rect.height * 0.78 - starDrift * 0.25, 5, "rgba(244, 157, 73, 0.82)", -seconds * 0.6);
+  }
+}
+
+function initMeshifyCanvas() {
+  if (!elements.meshifyCanvas || meshifyVisual.context) return;
+  const observer = new ResizeObserver(() => rebuildMeshifyLayers());
+  observer.observe(elements.meshifyCanvas.parentElement);
+  const frame = (time) => {
+    if (!elements.meshWorkspace.classList.contains("hidden")) renderMeshifyFrame(time);
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
 }
 
 function resizeViewport() {
@@ -139,7 +381,7 @@ function renderMeshes(fit = false) {
     const color = new THREE.Color(sourceColor[0], sourceColor[1], sourceColor[2]);
     let material;
     if (state.viewMode === "mesh") {
-      material = new THREE.MeshBasicMaterial({ color: 0x78838d, transparent: true, opacity: 0.07, depthWrite: false, side: THREE.DoubleSide });
+      material = new THREE.MeshBasicMaterial({ color: 0x7769c8, transparent: true, opacity: 0.1, depthWrite: false, side: THREE.DoubleSide });
     } else if (state.viewMode === "render") {
       material = new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide });
     } else {
@@ -157,13 +399,13 @@ function renderMeshes(fit = false) {
     topologyGeometry.setAttribute("position", new THREE.Float32BufferAttribute(topologyPositions, 3));
     const topology = new THREE.LineSegments(
       topologyGeometry,
-      new THREE.LineBasicMaterial({ color: 0x9ba6b1, transparent: true, opacity: 0.72 })
+      new THREE.LineBasicMaterial({ color: 0x6f62bf, transparent: true, opacity: 0.75 })
     );
     topology.visible = state.viewMode === "mesh";
     mesh.add(topology);
     const highlight = new THREE.Mesh(
       new THREE.BufferGeometry(),
-      new THREE.MeshStandardMaterial({ color: 0xf5a623, emissive: 0x6b3600, roughness: 0.55, side: THREE.DoubleSide })
+      new THREE.MeshStandardMaterial({ color: 0xed7d69, emissive: 0x5c1b13, roughness: 0.58, side: THREE.DoubleSide })
     );
     highlight.renderOrder = 2;
     mesh.add(highlight);
@@ -256,7 +498,7 @@ function updateContext() {
     ? `Vertices&nbsp;&nbsp; ${record.vertex_count.toLocaleString()}<br>Edges&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${record.edge_count.toLocaleString()}<br>Faces&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; ${record.face_count.toLocaleString()}`
     : "";
   elements.selectionPreview.innerHTML = record
-    ? `<div style="text-align:center"><strong style="display:block;color:#f5a623;font-size:26px">${faces || record.face_count}</strong><span>${faces ? "selected faces" : "whole object selected"}</span></div>`
+    ? `<div style="text-align:center"><strong style="display:block;color:#d9685a;font-size:26px">${faces || record.face_count}</strong><span>${faces ? "selected faces" : "whole object selected"}</span></div>`
     : "<span>Select a mesh and click faces</span>";
 }
 
@@ -338,6 +580,14 @@ function fileUrl(path) {
   return path ? window.glyphDesktop.toFileUrl(path) : "";
 }
 
+function sourceDisplayUrl(source) {
+  if (state.sourcePreview?.sourceId === source?.id) return state.sourcePreview.url;
+  const origin = String(source?.origin || "");
+  const presetId = origin.startsWith("preset:") ? origin.slice("preset:".length) : "";
+  const preset = state.sourcePresets.find((item) => item.id === presetId);
+  return preset?.asset || fileUrl(source?.path);
+}
+
 function activeSource() {
   const source = state.project?.source;
   return source?.versions?.find((item) => item.id === source.active_id) || null;
@@ -372,11 +622,46 @@ function renderImagine() {
   elements.sourceImage.classList.toggle("hidden", !source);
   elements.sourcePlaceholder.classList.toggle("hidden", Boolean(source));
   elements.sourcePreview.classList.toggle("empty", !source);
-  if (source) elements.sourceImage.src = fileUrl(source.path);
+  if (source) elements.sourceImage.src = sourceDisplayUrl(source);
   elements.lockSource.disabled = !source;
   elements.replaceSource.classList.toggle("hidden", !source);
   elements.sourceReadyTitle.textContent = source ? "Source image ready" : "No source image loaded";
   elements.sourceReadyCopy.textContent = source ? "Continue when this is the exact image you want TRELLIS to reconstruct." : "Choose a PNG, JPEG, or WebP image to begin.";
+  elements.sourceHeading.textContent = source ? "Your source is ready for 3D." : "Start with the object you want to make 3D.";
+  elements.sourceSubheading.textContent = source ? "This image is ready to lock in and turn into a mesh." : "Load one clean image with the full object visible and a simple background.";
+  renderSourcePresets();
+}
+
+function renderSourcePresets() {
+  if (!elements.sourcePresets) return;
+  const origin = activeSource()?.origin || "";
+  elements.sourcePresets.innerHTML = "";
+  for (const preset of state.sourcePresets) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `source-preset${origin === `preset:${preset.id}` ? " active" : ""}`;
+    button.dataset.presetId = preset.id;
+    button.innerHTML = `<span class="preset-image"><img src="${escapeHtml(preset.asset)}" alt=""></span><strong>${escapeHtml(preset.label)}</strong><small>${escapeHtml(preset.description)}</small>`;
+    button.addEventListener("click", () => selectSourcePreset(preset.id));
+    elements.sourcePresets.append(button);
+  }
+}
+
+async function selectSourcePreset(presetId) {
+  const buttons = [...elements.sourcePresets.querySelectorAll("button")];
+  buttons.forEach((button) => { button.disabled = true; });
+  try {
+    const preset = state.sourcePresets.find((item) => item.id === presetId);
+    const result = await window.glyphDesktop.importPreset(preset);
+    state.project = result.project;
+    state.sourcePreview = { sourceId: result.source_id, url: result.preview_url };
+    renderWorkflow();
+    toast("Example selected. Continue when you are ready for TRELLIS.");
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    buttons.forEach((button) => { button.disabled = false; });
+  }
 }
 
 function renderAuth() {
@@ -420,44 +705,80 @@ async function signInWithChatGPT() {
   }
 }
 
+function valueAtPath(payload, path) {
+  let value = payload;
+  for (const key of String(path).split(".")) {
+    if (!value || typeof value !== "object" || !(key in value)) return undefined;
+    value = value[key];
+  }
+  return value;
+}
+
+function trellisValue(job, field) {
+  const fallbackPaths = {
+    job_id: ["job_id", "id"],
+    status: ["status", "state"],
+    progress: ["progress", "percent"],
+    message: ["message", "detail", "error.message"],
+    mesh_output: ["mesh_output", "mesh_url", "output.mesh_url", "output.glb_url", "result.mesh_url", "result.glb_url"],
+  };
+  const paths = state.trellisContract?.response?.fields?.[field] || fallbackPaths[field] || [];
+  for (const path of paths) {
+    const value = valueAtPath(job, path);
+    if (value !== undefined && value !== null) return value;
+  }
+  return undefined;
+}
+
+function trellisStatuses(group, fallback) {
+  return state.trellisContract?.response?.statuses?.[group] || fallback;
+}
+
 function normalizedJobStatus(job) {
-  return String(job?.status || "ready").toLowerCase();
+  return String(trellisValue(job, "status") ?? job?.status ?? "ready").toLowerCase();
 }
 
 function hasMeshOutput(job) {
   if (!job) return false;
-  const keys = new Set(["glb_url", "mesh_url", "output_url", "glb_path", "mesh_path", "glb", "mesh", "replacement_glb", "path", "url"]);
-  const scan = (value, depth = 0) => {
-    if (!value || depth > 2) return false;
-    if (Array.isArray(value)) return value.some((item) => scan(item, depth + 1));
-    if (typeof value !== "object") return false;
-    return Object.entries(value).some(([key, item]) => (keys.has(key) && typeof item === "string") || scan(item, depth + 1));
-  };
-  return scan(job);
+  return typeof trellisValue(job, "mesh_output") === "string";
 }
 
 function renderMesh() {
   const locked = state.project.source.locked;
   if (!locked) return;
-  const imageUrl = fileUrl(locked.path);
+  const imageUrl = sourceDisplayUrl(locked);
   elements.lockedSourceImage.src = imageUrl;
   elements.meshSourceGhost.src = imageUrl;
+  setMeshifyCanvasSource(imageUrl);
   elements.lockedSourceVersion.textContent = locked.id.replace("source-", "Source ");
   elements.lockedSourceHash.textContent = `sha256:${locked.sha256}`;
   elements.lockedSourcePrompt.textContent = locked.prompt || "Imported source";
   const job = state.project.mesh.job;
   const status = normalizedJobStatus(job);
-  const rawProgress = Number(job?.progress ?? job?.percent ?? (status === "completed" || status === "succeeded" ? 100 : ["running", "processing", "reconstructing"].includes(status) ? 54 : job ? 12 : 0));
+  const runningStatuses = trellisStatuses("running", ["running", "processing", "reconstructing"]);
+  const completeStatuses = trellisStatuses("complete", ["completed", "succeeded", "success"]);
+  const failedStatuses = trellisStatuses("failed", ["failed", "error", "cancelled", "canceled"]);
+  const queuedStatuses = trellisStatuses("queued", ["queued", "pending"]);
+  const rawProgress = Number(trellisValue(job, "progress") ?? (completeStatuses.includes(status) ? 100 : runningStatuses.includes(status) ? 54 : job ? 12 : 0));
   const progress = Math.max(0, Math.min(100, rawProgress <= 1 && rawProgress > 0 ? rawProgress * 100 : rawProgress));
-  const running = ["queued", "running", "processing", "reconstructing", "pending"].includes(status);
-  const complete = ["completed", "succeeded", "success"].includes(status);
-  const failed = ["failed", "error", "cancelled"].includes(status);
+  const running = [...queuedStatuses, ...runningStatuses].includes(status);
+  const complete = completeStatuses.includes(status);
+  const failed = failedStatuses.includes(status);
+  meshifyVisual.progress = progress;
+  meshifyVisual.status = failed ? "failed" : complete ? "complete" : running ? "running" : "ready";
   elements.meshJobPill.textContent = job ? status.replace(/^./, (value) => value.toUpperCase()) : "Ready";
   elements.meshProgressTitle.textContent = complete ? "Mesh generation complete" : failed ? "Conversion failed" : running ? "TRELLIS is reconstructing" : "Ready to meshify";
   elements.meshProgressPercent.textContent = `${Math.round(progress)}%`;
   elements.meshProgressBar.style.width = `${progress}%`;
   elements.meshProgressCopy.textContent = complete ? "Choose the completed GLB to validate it in Blender and unlock Edit." : failed ? "Retrying will use the same locked source." : running ? "You can leave this screen; the job remains attached to this project." : "The source is locked. Start TRELLIS when your endpoint is configured.";
   elements.meshStateIcon.parentElement.classList.toggle("running", running);
+  elements.meshStateIcon.parentElement.classList.toggle("complete", complete);
+  elements.meshStateIcon.parentElement.classList.toggle("failed", failed);
+  if (meshifyLottie) {
+    if (failed) meshifyLottie.pause();
+    else meshifyLottie.play();
+    meshifyLottie.setSpeed(running ? 1 : complete ? 0.45 : 0.72);
+  }
   elements.conversionUpload.classList.toggle("active", running);
   elements.conversionUpload.classList.toggle("complete", complete);
   elements.conversionValidate.classList.toggle("active", complete);
@@ -485,11 +806,25 @@ async function refreshMeshJob(jobId, silent = false) {
 
 async function load() {
   initViewport();
+  initMeshifyAnimation();
+  initMeshifyCanvas();
   try {
-    const [project, settings, auth] = await Promise.all([api("/api/project/state"), api("/api/settings"), api("/api/auth/chatgpt")]);
+    const [project, settings, auth, sourcePresets, trellisContract] = await Promise.all([
+      api("/api/project/state"),
+      api("/api/settings"),
+      api("/api/auth/chatgpt"),
+      api("/api/source/presets"),
+      api("/api/trellis/contract"),
+    ]);
     state.project = project;
     state.settings = settings;
     state.auth = auth;
+    const guides = Array.isArray(sourcePresets) ? sourcePresets : sourcePresets?.presets || [];
+    state.sourcePresets = BUNDLED_SOURCE_PRESETS.map((preset, index) => ({
+      ...preset,
+      guidance: guides[index] || null,
+    }));
+    state.trellisContract = trellisContract;
     elements.modelSetting.value = settings.model;
     elements.trellisEndpoint.value = settings.trellis_endpoint;
     elements.trellisStatus.textContent = settings.trellis_endpoint ? "Configured" : "Not configured";
@@ -508,10 +843,9 @@ elements.importSource.addEventListener("click", async () => {
   if (!path) return;
   elements.importSource.disabled = true;
   try {
-    state.project = await api("/api/source/import", {
-      method: "POST",
-      body: JSON.stringify({ path }),
-    });
+    const result = await window.glyphDesktop.importSource({ path, origin: "upload" });
+    state.project = result.project;
+    state.sourcePreview = { sourceId: result.source_id, url: result.preview_url };
     renderWorkflow();
     toast("Source image imported");
   } catch (error) { toast(error.message, true); }
@@ -572,7 +906,7 @@ elements.refreshMeshify.addEventListener("click", () => refreshMeshJob(state.pro
 
 elements.approveMesh.addEventListener("click", async () => {
   const job = state.project?.mesh?.job;
-  const automatic = ["completed", "succeeded", "success"].includes(normalizedJobStatus(job)) && hasMeshOutput(job);
+  const automatic = trellisStatuses("complete", ["completed", "succeeded", "success"]).includes(normalizedJobStatus(job)) && hasMeshOutput(job);
   const path = automatic ? null : await window.glyphDesktop.chooseMesh();
   if (!automatic && !path) return;
   elements.approveMesh.disabled = true;
@@ -691,6 +1025,7 @@ elements.saveSettings.addEventListener("click", async (event) => {
         planner: "CODEX",
       }),
     });
+    state.trellisContract = await api("/api/trellis/contract");
     elements.trellisStatus.textContent = state.settings.trellis_endpoint ? "Configured" : "Not configured";
     elements.settingsDialog.close();
     renderWorkflow();

@@ -19,6 +19,7 @@ with an explicit parent lineage.
 
 - a native desktop window with an interactive Three.js mesh viewport;
 - a focused source-image import workspace with no image-generation API dependency;
+- four bundled transparent source presets plus local image upload;
 - an explicit, irreversible source confirmation;
 - an asynchronous TRELLIS reconstruction workspace;
 - Blender-validated GLB/glTF approval before Edit unlocks;
@@ -52,6 +53,12 @@ The launcher installs the JavaScript dependencies on the first run and then open
 the TRELLIS endpoint in Settings. Glyph resolves Codex from the ChatGPT desktop app or a healthy CLI
 installation, and uses its ChatGPT sign-in for agent planning.
 
+To use a Glyph backend on another machine, create `backend.json` in Electron's
+`glyph-desktop` application-data directory with `api_base` and `api_token` fields, or set
+`GLYPH_API_BASE` and `GLYPH_API_TOKEN`. The Electron main process owns the credential and proxies
+requests; the token is never exposed to renderer JavaScript. Remote source images are transferred
+with `POST /api/source/upload` rather than filesystem paths that only exist on the desktop machine.
+
 ## Package the macOS app
 
 ```bash
@@ -79,6 +86,12 @@ For initial reconstruction, the versioned request contains the exact locked imag
 SHA-256 provenance hash, and requested GLB and validation outputs. Completed endpoint outputs can be
 downloaded and approved directly; a local GLB/glTF can also be chosen manually. Blender must import
 and find valid mesh geometry before the project advances to Edit.
+
+The model-server placeholder and renderer response contract live together in
+`glyph_harness/trellis_adapter.py`. Update `MODEL_SERVER` with the final create/status paths and
+`EXPECTED_RESPONSE` with the server's job id, status, progress, message, and GLB field paths. Glyph
+exposes that definition at `GET /api/trellis/contract`; the frontend uses the returned dot paths and
+status groups instead of hard-coding one provider's response shape.
 
 ## Architecture
 
