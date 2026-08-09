@@ -40,7 +40,7 @@ const elements = Object.fromEntries(
     "settings-auth-title", "settings-auth-detail", "settings-sign-in",
     "confirm-lock", "locked-source-image", "locked-source-version", "locked-source-hash", "locked-source-prompt",
     "mesh-source-ghost", "mesh-job-pill", "mesh-progress-title", "mesh-progress-percent", "mesh-progress-bar",
-    "mesh-progress-copy", "mesh-state-icon", "meshify-animation", "meshify-canvas", "conversion-upload", "conversion-validate", "start-meshify",
+    "mesh-progress-copy", "mesh-state-icon", "meshify-animation", "meshify-canvas", "conversion-analysis", "conversion-upload", "conversion-validate", "start-meshify",
     "refresh-meshify", "approve-mesh",
   ].map((id) => [id.replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase()), document.getElementById(id)])
 );
@@ -64,8 +64,14 @@ const meshifyVisual = {
   width: 0,
   height: 0,
   progress: 0,
+  targetProgress: 0,
+  displayProgress: 0,
+  hasReportedProgress: false,
+  lastFrameTime: 0,
   status: "ready",
 };
+let meshifyStarting = false;
+let meshifyAutoAttempt = null;
 const meshViews = new Map();
 
 async function api(path, options = {}) {
@@ -267,10 +273,26 @@ function renderMeshifyFrame(time) {
   const running = meshifyVisual.status === "running";
   const complete = meshifyVisual.status === "complete";
   const failed = meshifyVisual.status === "failed";
-  const progressRatio = Math.max(0, Math.min(1, meshifyVisual.progress / 100));
-  const baseSplit = complete ? 0.2 : running ? 0.31 + progressRatio * 0.47 : 0.55;
-  const shimmer = failed ? 0 : Math.sin(seconds * 1.55) * (running ? 0.022 : 0.012);
+  const elapsed = meshifyVisual.lastFrameTime ? Math.min((time - meshifyVisual.lastFrameTime) / 1000, 0.25) : 0;
+  meshifyVisual.lastFrameTime = time;
+  if (complete) {
+    meshifyVisual.displayProgress = Math.min(100, meshifyVisual.displayProgress + elapsed * 34);
+  } else if (running) {
+    const target = Math.max(meshifyVisual.displayProgress, meshifyVisual.targetProgress);
+    if (target > meshifyVisual.displayProgress) {
+      meshifyVisual.displayProgress += Math.min(target - meshifyVisual.displayProgress, elapsed * 9);
+    } else if (!meshifyVisual.hasReportedProgress) {
+      const creepRate = meshifyVisual.displayProgress < 35 ? 0.42 : meshifyVisual.displayProgress < 70 ? 0.22 : 0.08;
+      meshifyVisual.displayProgress = Math.min(92, meshifyVisual.displayProgress + elapsed * creepRate);
+    }
+  }
+  const displayedProgress = Math.max(0, Math.min(100, meshifyVisual.displayProgress));
+  const progressRatio = displayedProgress / 100;
+  const baseSplit = complete ? 0.82 : running ? 0.18 + progressRatio * 0.64 : 0.18;
+  const shimmer = failed ? 0 : Math.sin(seconds * 1.55) * (running ? 0.006 : 0.004);
   const split = rect.x + rect.width * Math.max(0.16, Math.min(0.82, baseSplit + shimmer));
+
+  updateMeshProgressUi(displayedProgress, running, complete);
 
   context.save();
   context.translate(rect.x + rect.width / 2, rect.y + rect.height / 2);
@@ -331,6 +353,23 @@ function renderMeshifyFrame(time) {
     drawMagicStar(context, rect.x + rect.width + 12, rect.y + rect.height * 0.55 + starDrift * 0.5, 6, `rgba(126, 105, 218, ${twinkle})`, seconds * 0.8);
     drawMagicStar(context, rect.x - 8, rect.y + rect.height * 0.78 - starDrift * 0.25, 5, "rgba(244, 157, 73, 0.82)", -seconds * 0.6);
   }
+}
+
+function updateMeshProgressUi(progress, running, complete) {
+  elements.meshProgressPercent.textContent = `${Math.round(progress)}%`;
+  elements.meshProgressBar.style.width = `${progress}%`;
+  const analysisComplete = complete || (running && progress >= 10);
+  const reconstructActive = running && progress >= 10;
+  const optimizeActive = running && progress >= 80;
+  elements.conversionAnalysis.classList.toggle("active", running && !analysisComplete);
+  elements.conversionAnalysis.classList.toggle("complete", analysisComplete);
+  elements.conversionAnalysis.querySelector("span").textContent = analysisComplete ? "✓" : "2";
+  elements.conversionUpload.classList.toggle("active", reconstructActive && !optimizeActive);
+  elements.conversionUpload.classList.toggle("complete", complete || optimizeActive);
+  elements.conversionUpload.querySelector("span").textContent = complete || optimizeActive ? "✓" : "3";
+  elements.conversionValidate.classList.toggle("active", optimizeActive && !complete);
+  elements.conversionValidate.classList.toggle("complete", complete);
+  elements.conversionValidate.querySelector("span").textContent = complete ? "✓" : "4";
 }
 
 function initMeshifyCanvas() {
@@ -759,18 +798,35 @@ function renderMesh() {
   const completeStatuses = trellisStatuses("complete", ["completed", "succeeded", "success"]);
   const failedStatuses = trellisStatuses("failed", ["failed", "error", "cancelled", "canceled"]);
   const queuedStatuses = trellisStatuses("queued", ["queued", "pending"]);
-  const rawProgress = Number(trellisValue(job, "progress") ?? (completeStatuses.includes(status) ? 100 : runningStatuses.includes(status) ? 54 : job ? 12 : 0));
+  const reportedValue = trellisValue(job, "progress");
+  const hasReportedProgress = reportedValue !== undefined && reportedValue !== null && Number.isFinite(Number(reportedValue));
+  const rawProgress = hasReportedProgress ? Number(reportedValue) : completeStatuses.includes(status) ? 100 : job ? 4 : 0;
   const progress = Math.max(0, Math.min(100, rawProgress <= 1 && rawProgress > 0 ? rawProgress * 100 : rawProgress));
   const running = [...queuedStatuses, ...runningStatuses].includes(status);
   const complete = completeStatuses.includes(status);
   const failed = failedStatuses.includes(status);
   meshifyVisual.progress = progress;
+  meshifyVisual.targetProgress = complete ? 100 : running ? Math.max(progress, queuedStatuses.includes(status) ? 4 : 10) : progress;
+  meshifyVisual.hasReportedProgress = hasReportedProgress;
+  if (!job) meshifyVisual.displayProgress = 0;
+  if (complete) meshifyVisual.targetProgress = 100;
   meshifyVisual.status = failed ? "failed" : complete ? "complete" : running ? "running" : "ready";
-  elements.meshJobPill.textContent = job ? status.replace(/^./, (value) => value.toUpperCase()) : "Ready";
-  elements.meshProgressTitle.textContent = complete ? "Mesh generation complete" : failed ? "Conversion failed" : running ? "TRELLIS is reconstructing" : "Ready to meshify";
-  elements.meshProgressPercent.textContent = `${Math.round(progress)}%`;
-  elements.meshProgressBar.style.width = `${progress}%`;
-  elements.meshProgressCopy.textContent = complete ? "Choose the completed GLB to validate it in Blender and unlock Edit." : failed ? "Retrying will use the same locked source." : running ? "You can leave this screen; the job remains attached to this project." : "The source is locked. Start TRELLIS when your endpoint is configured.";
+  const endpointConfigured = Boolean(String(state.settings?.trellis_endpoint || "").trim());
+  elements.meshJobPill.textContent = job ? status.replace(/^./, (value) => value.toUpperCase()) : endpointConfigured ? "Starting" : "Connection needed";
+  elements.meshProgressTitle.textContent = complete ? "Mesh generation complete" : failed ? "Conversion failed" : running ? "TRELLIS is reconstructing" : endpointConfigured ? "Starting TRELLIS automatically" : "Connect your TRELLIS server";
+  elements.meshProgressPercent.textContent = `${Math.round(meshifyVisual.displayProgress)}%`;
+  elements.meshProgressBar.style.width = `${meshifyVisual.displayProgress}%`;
+  elements.meshProgressCopy.textContent = complete
+    ? "Choose the completed GLB to validate it in Blender and unlock Edit."
+    : failed
+      ? "Glyph kept the locked source safe. Retry whenever the model server is ready."
+      : running
+        ? hasReportedProgress
+          ? "Live progress from TRELLIS. Glyph refreshes the job automatically."
+          : "Estimated progress while TRELLIS works; Glyph refreshes the job automatically."
+        : endpointConfigured
+          ? "Your locked source is ready. Glyph is submitting it automatically."
+          : "Add the TRELLIS model-server URL in Settings. Your locked source is safe.";
   elements.meshStateIcon.parentElement.classList.toggle("running", running);
   elements.meshStateIcon.parentElement.classList.toggle("complete", complete);
   elements.meshStateIcon.parentElement.classList.toggle("failed", failed);
@@ -779,13 +835,47 @@ function renderMesh() {
     else meshifyLottie.play();
     meshifyLottie.setSpeed(running ? 1 : complete ? 0.45 : 0.72);
   }
-  elements.conversionUpload.classList.toggle("active", running);
-  elements.conversionUpload.classList.toggle("complete", complete);
-  elements.conversionValidate.classList.toggle("active", complete);
-  elements.startMeshify.textContent = failed ? "Retry same locked source" : job ? "Start another conversion" : "Start TRELLIS conversion";
-  elements.refreshMeshify.classList.toggle("hidden", !job?.job_id || complete || failed);
+  updateMeshProgressUi(meshifyVisual.displayProgress, running, complete);
+  elements.startMeshify.classList.toggle("hidden", Boolean(job) && !failed);
+  elements.startMeshify.textContent = failed ? "Retry conversion" : endpointConfigured ? "Starting automatically…" : "Connect TRELLIS in Settings";
+  elements.startMeshify.disabled = endpointConfigured && !failed;
+  elements.refreshMeshify.classList.add("hidden");
   elements.approveMesh.textContent = complete && hasMeshOutput(job) ? "Approve TRELLIS mesh →" : "Choose completed GLB to approve";
   if (running) scheduleMeshPoll(job.job_id);
+  if (!job && endpointConfigured) scheduleAutomaticMeshify();
+}
+
+function scheduleAutomaticMeshify() {
+  const lockedId = state.project?.source?.locked?.id;
+  if (!lockedId || meshifyStarting || meshifyAutoAttempt === lockedId) return;
+  meshifyAutoAttempt = lockedId;
+  setTimeout(() => startMeshify(true), 0);
+}
+
+async function startMeshify(automatic = false) {
+  if (meshifyStarting) return;
+  if (!String(state.settings?.trellis_endpoint || "").trim()) {
+    elements.settingsDialog.showModal();
+    elements.trellisEndpoint.focus();
+    if (!automatic) toast("Connect a TRELLIS model server once; future conversions start automatically.", true);
+    return;
+  }
+  meshifyStarting = true;
+  elements.startMeshify.disabled = true;
+  try {
+    const job = await api("/api/trellis/meshify", { method: "POST", body: "{}" });
+    state.project.mesh.job = job;
+    meshifyVisual.displayProgress = Math.max(meshifyVisual.displayProgress, 2);
+    renderMesh();
+    toast("TRELLIS conversion started automatically");
+  } catch (error) {
+    meshifyAutoAttempt = null;
+    renderMesh();
+    toast(error.message, true);
+  } finally {
+    meshifyStarting = false;
+    elements.startMeshify.disabled = false;
+  }
 }
 
 function scheduleMeshPoll(jobId) {
@@ -870,12 +960,20 @@ elements.lockConfirmation.addEventListener("change", () => {
 elements.confirmLock.addEventListener("click", async (event) => {
   event.preventDefault();
   if (!elements.lockConfirmation.checked) return;
+  if (!String(state.settings?.trellis_endpoint || "").trim()) {
+    elements.lockDialog.close();
+    elements.settingsDialog.showModal();
+    elements.trellisEndpoint.focus();
+    elements.confirmLock.disabled = false;
+    toast("Connect TRELLIS before locking this source. After that, conversion starts automatically.", true);
+    return;
+  }
   elements.confirmLock.disabled = true;
   try {
     state.project = await api("/api/source/lock", { method: "POST", body: JSON.stringify({ confirmed: true }) });
     elements.lockDialog.close();
     renderWorkflow();
-    toast("Source locked permanently. TRELLIS is now available.");
+    toast("Source locked. Starting TRELLIS automatically…");
   } catch (error) { toast(error.message, true); elements.confirmLock.disabled = false; }
 });
 
@@ -891,16 +989,7 @@ elements.forkProject.addEventListener("click", async () => {
   finally { elements.forkProject.disabled = false; }
 });
 
-elements.startMeshify.addEventListener("click", async () => {
-  elements.startMeshify.disabled = true;
-  try {
-    const job = await api("/api/trellis/meshify", { method: "POST", body: "{}" });
-    state.project.mesh.job = job;
-    renderMesh();
-    toast(`TRELLIS job ${job.job_id} started`);
-  } catch (error) { toast(error.message, true); }
-  finally { elements.startMeshify.disabled = false; }
-});
+elements.startMeshify.addEventListener("click", () => startMeshify(false));
 
 elements.refreshMeshify.addEventListener("click", () => refreshMeshJob(state.project?.mesh?.job?.job_id));
 
@@ -1021,15 +1110,16 @@ elements.saveSettings.addEventListener("click", async (event) => {
       method: "POST",
       body: JSON.stringify({
         model: elements.modelSetting.value,
-        trellis_endpoint: elements.trellisEndpoint.value,
+        trellis_endpoint: elements.trellisEndpoint.value.trim(),
         planner: "CODEX",
       }),
     });
     state.trellisContract = await api("/api/trellis/contract");
     elements.trellisStatus.textContent = state.settings.trellis_endpoint ? "Configured" : "Not configured";
     elements.settingsDialog.close();
+    meshifyAutoAttempt = null;
     renderWorkflow();
-    toast("Settings saved");
+    toast(state.project?.stage === "MESH" && !state.project?.mesh?.job ? "Settings saved. Starting TRELLIS automatically…" : "Settings saved");
   } catch (error) { toast(error.message, true); }
 });
 
