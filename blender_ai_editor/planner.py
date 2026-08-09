@@ -24,6 +24,73 @@ scale (amount or vector), translate (vector in local units), rotate (vector in d
 """
 
 
+def _codex_candidates(executable="codex"):
+    """Prefer OpenAI's signed desktop binary over potentially stale package-manager shims."""
+    requested = str(executable or "codex")
+    candidates = []
+    if os.path.sep in requested:
+        candidates.append(requested)
+    else:
+        candidates.extend(
+            [
+                "/Applications/ChatGPT.app/Contents/Resources/codex",
+                "/Applications/Codex.app/Contents/Resources/codex",
+            ]
+        )
+        discovered = shutil.which(requested)
+        if discovered:
+            candidates.append(discovered)
+    return list(dict.fromkeys(candidates))
+
+
+def resolve_codex_executable(executable="codex"):
+    for candidate in _codex_candidates(executable):
+        path = Path(candidate)
+        if not path.is_file():
+            continue
+        try:
+            probe = subprocess.run(
+                [str(path), "--version"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if probe.returncode == 0:
+            return str(path)
+    raise RuntimeError("Codex was not found. Install ChatGPT or the Codex CLI, then sign in with ChatGPT.")
+
+
+def codex_auth_status(executable="codex"):
+    try:
+        binary = resolve_codex_executable(executable)
+    except RuntimeError as exc:
+        return {"available": False, "signed_in": False, "method": None, "detail": str(exc), "executable": None}
+    try:
+        result = subprocess.run(
+            [binary, "login", "status"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {"available": True, "signed_in": False, "method": None, "detail": str(exc), "executable": binary}
+    detail = (result.stdout.strip() or result.stderr.strip()).splitlines()[-1] if (result.stdout.strip() or result.stderr.strip()) else "Not signed in"
+    chatgpt = result.returncode == 0 and "chatgpt" in detail.lower()
+    return {
+        "available": True,
+        "signed_in": chatgpt,
+        "method": "chatgpt" if chatgpt else None,
+        "detail": detail,
+        "executable": binary,
+    }
+
+
 def _number_after(pattern, text, default):
     match = re.search(pattern, text, flags=re.IGNORECASE)
     return float(match.group(1)) if match else default
@@ -111,9 +178,10 @@ def _planner_prompt(instruction, context, references):
 
 
 def codex_plan(instruction, context, references, model="gpt-5.6-sol", executable="codex"):
-    binary = shutil.which(executable) if os.path.sep not in executable else executable
-    if not binary or not Path(binary).exists():
-        raise RuntimeError("Codex CLI was not found. Set its path in Advanced settings.")
+    auth = codex_auth_status(executable)
+    if not auth["signed_in"]:
+        raise RuntimeError("Sign in with ChatGPT in Glyph before asking Glyph Agent to edit the mesh.")
+    binary = auth["executable"]
     with tempfile.TemporaryDirectory(prefix="blender_ai_edit_") as folder:
         folder_path = Path(folder)
         schema_path = folder_path / "edit_plan.schema.json"

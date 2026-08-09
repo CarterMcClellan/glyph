@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-D3sB7fleN0DUBuPnNeLEVM2hj0YfufurW6QHSerDT3Y='; style-src 'self' 'unsafe-inline'; connect-src http://127.0.0.1:47831; img-src 'self' file: data: blob:" />
+    <title>Glyph</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="topbar drag-region">
+        <div class="brand no-drag"><span class="brand-mark">◆</span><strong>Glyph</strong></div>
+        <button id="open-project" class="project-button no-drag">Untitled Object</button>
+        <div id="workflow-status" class="workflow-status no-drag" aria-label="Project progress">
+          <div id="status-imagine" class="workflow-step active"><span>1</span>Source</div>
+          <i></i>
+          <div id="status-mesh" class="workflow-step"><span>2</span>Meshify</div>
+          <i></i>
+          <div id="status-edit" class="workflow-step"><span>3</span>Edit</div>
+        </div>
+        <div id="editor-toolbar" class="toolbar no-drag hidden">
+          <button id="select-tool" class="tool active"><span>↖</span> Select</button>
+          <button id="move-tool" class="tool"><span>✥</span> Move</button>
+          <span class="toolbar-divider"></span>
+          <span class="toolbar-hint">Click faces to add or remove context</span>
+        </div>
+        <div id="viewport-modes" class="viewport-modes no-drag hidden" role="group" aria-label="Viewport appearance">
+          <button id="view-mesh" class="view-mode">Mesh</button>
+          <button id="view-render" class="view-mode">Render</button>
+          <button id="view-lit" class="view-mode active">Lit</button>
+        </div>
+        <button id="fork-project" class="secondary-button compact no-drag hidden">Fork project</button>
+        <button id="chatgpt-auth" class="auth-button no-drag"><span class="auth-dot"></span><span id="chatgpt-auth-label">Checking ChatGPT…</span></button>
+        <button id="settings-button" class="icon-button no-drag settings-button" title="Settings">⚙</button>
+      </header>
+
+      <main id="imagine-workspace" class="stage-workspace imagine-workspace">
+        <aside class="source-rail panel">
+          <div class="panel-title"><div><span class="eyebrow">Project input</span><h2>Source</h2></div></div>
+          <div class="source-steps">
+            <div class="source-step active"><span>1</span><div><strong>Load an image</strong><small>PNG, JPEG, or WebP</small></div></div>
+            <div class="source-step"><span>2</span><div><strong>Reconstruct with TRELLIS</strong><small>Generate the first mesh</small></div></div>
+            <div class="source-step"><span>3</span><div><strong>Edit with Glyph Agent</strong><small>ChatGPT-powered local changes</small></div></div>
+          </div>
+          <div class="rail-note"><span>i</span><p>Glyph starts from an image you already have. It does not generate source images or require an OpenAI API key.</p></div>
+        </aside>
+
+        <section class="source-canvas">
+          <div class="stage-heading">
+            <div><span class="eyebrow accent-text">Source image</span><h1>Start with the object you want to make 3D.</h1><p>Load one clean image with the full object visible and a simple background.</p></div>
+            <span class="model-pill">Local file</span>
+          </div>
+          <button id="source-preview" class="source-preview empty" type="button" aria-label="Choose source image">
+            <img id="source-image" alt="Active source" class="hidden" />
+            <div id="source-placeholder" class="source-placeholder"><span>⇧</span><strong>Choose a source image</strong><small>Click to load PNG, JPEG, or WebP</small></div>
+          </button>
+          <div class="source-bottom-bar">
+            <div><strong id="source-ready-title">No source selected</strong><small id="source-ready-copy">Generate or import a source before locking.</small></div>
+            <button id="replace-source" class="secondary-button hidden">Replace image</button>
+            <button id="lock-source" class="primary-button" disabled>Continue to TRELLIS →</button>
+          </div>
+        </section>
+
+        <aside class="imagine-controls panel">
+          <div class="panel-title"><div><span class="eyebrow">Ready check</span><h2>Before you continue</h2></div></div>
+          <div class="control-content">
+            <div class="source-guidance">
+              <div><span>✓</span><p><strong>One object</strong><small>Avoid overlapping objects and busy scenes.</small></p></div>
+              <div><span>✓</span><p><strong>Complete silhouette</strong><small>Keep the whole object inside the frame.</small></p></div>
+              <div><span>✓</span><p><strong>Clear lighting</strong><small>Even lighting produces cleaner geometry.</small></p></div>
+            </div>
+            <button id="import-source" class="primary-button wide">Choose image…</button>
+            <div class="auth-explainer">
+              <div class="auth-explainer-title"><span>✦</span><strong>ChatGPT powers editing later</strong></div>
+              <p>After TRELLIS builds the mesh, sign in with ChatGPT to select a segment and describe changes to Glyph Agent.</p>
+              <span class="api-free-badge">No OpenAI API key</span>
+            </div>
+          </div>
+        </aside>
+      </main>
+
+      <main id="mesh-workspace" class="stage-workspace mesh-workspace hidden">
+        <aside class="locked-source panel">
+          <div class="panel-title"><div><span class="eyebrow">Immutable input</span><h2>Locked source</h2></div><span class="lock-badge">⌾ Locked</span></div>
+          <div class="locked-image-wrap"><img id="locked-source-image" alt="Locked source" /></div>
+          <div class="locked-metadata"><span id="locked-source-version">Source v1</span><code id="locked-source-hash">—</code><p id="locked-source-prompt"></p></div>
+          <div class="rail-note permanent"><span>✓</span><p>This source cannot be changed in this project. Fork to explore a different direction.</p></div>
+        </aside>
+
+        <section class="mesh-canvas">
+          <div class="stage-heading">
+            <div><span class="eyebrow accent-text">Mesh</span><h1>Turn the locked image into geometry.</h1><p>TRELLIS reconstructs a mesh from the exact source above.</p></div>
+            <span id="mesh-job-pill" class="model-pill">Ready</span>
+          </div>
+          <div class="mesh-preview">
+            <img id="mesh-source-ghost" alt="Source being converted" />
+            <div class="scan-overlay"></div>
+            <div id="mesh-state-icon" class="mesh-state-icon">⬡</div>
+          </div>
+          <div class="mesh-progress-card">
+            <div><strong id="mesh-progress-title">Ready to meshify</strong><span id="mesh-progress-percent">0%</span></div>
+            <div class="progress-track"><i id="mesh-progress-bar"></i></div>
+            <p id="mesh-progress-copy">The source is locked. Start TRELLIS when your endpoint is configured.</p>
+          </div>
+        </section>
+
+        <aside class="mesh-controls panel">
+          <div class="panel-title"><div><span class="eyebrow">Conversion</span><h2>TRELLIS</h2></div></div>
+          <div class="control-content">
+            <div class="conversion-step complete"><span>✓</span><div><strong>Source locked</strong><small>Provenance hash recorded</small></div></div>
+            <div id="conversion-upload" class="conversion-step"><span>2</span><div><strong>Upload & reconstruct</strong><small>Generate 3D geometry</small></div></div>
+            <div id="conversion-validate" class="conversion-step"><span>3</span><div><strong>Validate mesh</strong><small>Open in Blender under the hood</small></div></div>
+            <button id="start-meshify" class="primary-button wide">Start TRELLIS conversion</button>
+            <button id="refresh-meshify" class="secondary-button wide hidden">Refresh job status</button>
+            <button id="approve-mesh" class="secondary-button wide">Choose completed GLB to approve</button>
+            <p class="control-note">Approving a valid mesh unlocks Edit. A failed conversion can retry only this locked source.</p>
+          </div>
+        </aside>
+      </main>
+
+      <main id="workspace" class="workspace hidden">
+        <aside class="left-panel panel">
+          <div class="panel-title"><h2>Scene</h2><button id="scene-collapse" class="icon-button" title="Collapse Scene panel">‹</button></div>
+          <div class="search"><span>⌕</span><input id="scene-search" placeholder="Search scene…" /></div>
+          <div id="scene-tree" class="scene-tree"></div>
+          <div class="panel-footer"><span>◇</span><span>☷</span></div>
+        </aside>
+
+        <section class="center-column">
+          <div id="viewport" class="viewport">
+            <div id="viewport-stats" class="viewport-stats"></div>
+            <div id="viewport-empty" class="viewport-empty hidden">No visible meshes in this project.</div>
+            <div class="viewport-help">Orbit: drag · Zoom: scroll · Select faces: click</div>
+          </div>
+          <section class="composer">
+            <div class="prompt-row"><span class="spark">✦</span><textarea id="instruction" rows="2" placeholder="Describe a local mesh edit…">Make this area slightly wider and smoother</textarea></div>
+            <div class="composer-actions">
+              <button id="attach-reference" class="secondary-button">⌕ Attach reference</button>
+              <div id="reference-chip" class="reference-chip hidden"></div><div class="spacer"></div>
+              <div class="agent-badge"><span>✦</span> Glyph Agent</div>
+              <button id="reject-preview" class="danger-button hidden">Reject</button>
+              <button id="accept-preview" class="secondary-button hidden">Accept</button>
+              <button id="generate-preview" class="primary-button">✦ Generate Preview</button>
+            </div>
+          </section>
+        </section>
+
+        <aside class="right-panel panel">
+          <div class="panel-title"><h2>Model Context</h2><button class="icon-button">⌃</button></div>
+          <section class="context-section"><h3>Selection sent to model</h3><div id="selection-preview" class="selection-preview"><span>Select a mesh and click faces</span></div><div class="chips"><span id="object-chip" class="chip accent">No mesh</span><span id="face-chip" class="chip">0 faces</span><span id="vertex-chip" class="chip">0 vertices</span></div><button id="clear-selection" class="text-button">Clear face selection</button></section>
+          <section class="context-section"><h3>Included context</h3><label class="context-row"><input type="checkbox" checked /><span class="context-icon">◇</span><span><strong>Selected topology</strong><small>Exact face and vertex indices</small></span></label><label class="context-row"><input type="checkbox" checked /><span class="context-icon">⬡</span><span><strong>Same object</strong><small>Bounds and topology counts</small></span></label><label class="context-row"><input type="checkbox" checked /><span class="context-icon">▱</span><span><strong>Scene orientation</strong><small>Units and world transform</small></span></label></section>
+          <section class="context-section harness-section"><div class="section-heading"><h3>Harness activity</h3><span id="harness-status" class="status-dot idle"></span></div><div id="harness-steps" class="harness-steps"><p>No run yet.</p></div></section>
+          <section class="context-section trellis-section"><div class="section-heading"><h3>TRELLIS endpoint</h3><span id="trellis-status" class="muted">Not configured</span></div><button id="send-trellis" class="secondary-button wide">Send selection to TRELLIS</button></section>
+        </aside>
+      </main>
+    </div>
+
+    <dialog id="lock-dialog">
+      <form method="dialog">
+        <div class="lock-dialog-icon">⌾</div><h2>Lock this source permanently?</h2>
+        <p>Glyph will send this exact image to TRELLIS. Once conversion begins, you cannot replace it inside this project.</p>
+        <label class="confirmation-check"><input id="lock-confirmation" type="checkbox" /> <span>I understand that changing the source later will require a new project fork.</span></label>
+        <div class="dialog-actions"><button value="cancel" class="secondary-button">Not yet</button><button id="confirm-lock" value="default" class="primary-button" disabled>Lock and start mesh step →</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="settings-dialog">
+      <form method="dialog">
+        <div class="dialog-title"><h2>Glyph Settings</h2><button value="cancel" class="icon-button">×</button></div>
+        <div id="settings-auth-card" class="settings-auth-card"><span class="auth-dot"></span><div><strong id="settings-auth-title">Checking ChatGPT…</strong><small id="settings-auth-detail">Glyph Agent uses your ChatGPT sign-in.</small></div><button id="settings-sign-in" type="button" class="secondary-button">Sign in</button></div>
+        <label>Agent model<input id="model-setting" value="gpt-5.6-sol" /></label>
+        <label>TRELLIS endpoint<input id="trellis-endpoint" placeholder="https://trellis.example.com" /></label>
+        <p class="dialog-note">Glyph Agent uses Codex through your ChatGPT sign-in. TRELLIS remains a separate endpoint and receives the locked source image.</p>
+        <div class="dialog-actions"><button value="cancel" class="secondary-button">Cancel</button><button id="save-settings" value="default" class="primary-button">Save</button></div>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast hidden"></div>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "../../node_modules/three/build/three.module.js",
+          "three/addons/": "../../node_modules/three/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

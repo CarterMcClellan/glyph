@@ -9,3 +9,6 @@ jobs/
 dist/
 build/
 *.zip
+node_modules/
+.glyph/
+*.log
