@@ -44,10 +44,12 @@ class HarnessTests(unittest.TestCase):
 
 class _TrellisHandler(BaseHTTPRequestHandler):
     last_payload = None
+    last_authorization = None
 
     def do_POST(self):
         length = int(self.headers["Content-Length"])
         type(self).last_payload = json.loads(self.rfile.read(length))
+        type(self).last_authorization = self.headers.get("Authorization")
         body = json.dumps({"job_id": "job-123", "status": "queued"}).encode()
         self.send_response(202)
         self.send_header("Content-Type", "application/json")
@@ -75,6 +77,20 @@ class TrellisClientTests(unittest.TestCase):
         self.assertEqual(result["job_id"], "job-123")
         self.assertEqual(_TrellisHandler.last_payload["version"], 1)
         self.assertEqual(_TrellisHandler.last_payload["reference_images"], ["reference.png"])
+
+    def test_sends_optional_bearer_token(self):
+        server = HTTPServer(("127.0.0.1", 0), _TrellisHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            TrellisClient(f"http://127.0.0.1:{server.server_port}", "secret-token").submit(
+                "generate a cuff", {"objects": []}, []
+            )
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+        self.assertEqual(_TrellisHandler.last_authorization, "Bearer secret-token")
 
 
 if __name__ == "__main__":

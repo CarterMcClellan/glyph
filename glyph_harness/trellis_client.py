@@ -10,8 +10,9 @@ from urllib import error, parse, request
 
 
 class TrellisClient:
-    def __init__(self, endpoint: str):
+    def __init__(self, endpoint: str, api_token: str = ""):
         self.endpoint = endpoint.rstrip("/")
+        self.api_token = api_token.strip()
 
     def submit(self, instruction: str, selection_context: dict, references: list[str]) -> dict:
         if not self.endpoint:
@@ -51,11 +52,14 @@ class TrellisClient:
 
     def _request(self, method: str, path: str, payload: dict | None = None) -> dict:
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
+        headers = {"Content-Type": "application/json", "Accept": "application/json"}
+        if self.api_token:
+            headers["Authorization"] = f"Bearer {self.api_token}"
         req = request.Request(
             self.endpoint + path,
             data=body,
             method=method,
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers=headers,
         )
         try:
             with request.urlopen(req, timeout=60) as response:

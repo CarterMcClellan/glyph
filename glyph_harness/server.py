@@ -19,6 +19,38 @@ from .trellis_client import TrellisClient
 from blender_ai_editor.planner import codex_auth_status, resolve_codex_executable
 
 
+SOURCE_PRESETS = [
+    {
+        "id": "single-object",
+        "label": "Single object",
+        "description": "A centered object with a clean silhouette and minimal occlusion.",
+        "prompt": "A single centered object, fully visible, clean silhouette, neutral studio background",
+        "recommended_aspect_ratio": "1:1",
+    },
+    {
+        "id": "hard-surface",
+        "label": "Hard surface",
+        "description": "Products, props, vehicles, and other objects with manufactured edges.",
+        "prompt": "A single hard-surface object, three-quarter view, sharp details, neutral studio background",
+        "recommended_aspect_ratio": "1:1",
+    },
+    {
+        "id": "character",
+        "label": "Character",
+        "description": "A complete character with separated limbs and an unobstructed pose.",
+        "prompt": "A single full-body character, neutral pose, separated limbs, fully visible, plain background",
+        "recommended_aspect_ratio": "3:4",
+    },
+    {
+        "id": "organic",
+        "label": "Organic form",
+        "description": "Creatures, plants, food, and other rounded or irregular forms.",
+        "prompt": "A single organic object, three-quarter view, fully visible, soft studio lighting, plain background",
+        "recommended_aspect_ratio": "1:1",
+    },
+]
+
+
 class GlyphService:
     def __init__(self, project_root: Path, workspace: Path):
         self.workspace = workspace
@@ -36,6 +68,7 @@ class GlyphService:
             "model": "gpt-5.6-sol",
             "codex_executable": "codex",
             "trellis_endpoint": os.environ.get("GLYPH_TRELLIS_ENDPOINT", ""),
+            "trellis_api_token": os.environ.get("GLYPH_TRELLIS_API_TOKEN", ""),
         }
         if self.settings_path.is_file():
             try:
@@ -48,10 +81,12 @@ class GlyphService:
         return defaults
 
     def public_settings(self) -> dict:
-        return dict(self.settings)
+        public = {key: value for key, value in self.settings.items() if key != "trellis_api_token"}
+        public["trellis_auth_configured"] = bool(self.settings.get("trellis_api_token"))
+        return public
 
     def save_settings(self, updates: dict) -> dict:
-        allowed = {"planner", "model", "codex_executable", "trellis_endpoint"}
+        allowed = {"planner", "model", "codex_executable", "trellis_endpoint", "trellis_api_token"}
         self.settings.update({key: value for key, value in updates.items() if key in allowed})
         self.settings_path.write_text(json.dumps(self.settings, indent=2), encoding="utf-8")
         try:
@@ -59,6 +94,50 @@ class GlyphService:
         except OSError:
             pass
         return self.public_settings()
+
+    def trellis_client(self) -> TrellisClient:
+        return TrellisClient(
+            self.settings.get("trellis_endpoint", ""),
+            self.settings.get("trellis_api_token", ""),
+        )
+
+    def trellis_contract(self) -> dict:
+        return {
+            "version": 1,
+            "service": "trellis",
+            "configured": bool(self.settings.get("trellis_endpoint")),
+            "endpoint": self.settings.get("trellis_endpoint", ""),
+            "authentication": {
+                "type": "bearer",
+                "configured": bool(self.settings.get("trellis_api_token")),
+                "header": "Authorization: Bearer <token>",
+            },
+            "transport": {"content_type": "application/json", "max_mesh_bytes": 536870912},
+            "routes": {
+                "create_job": {"method": "POST", "path": "/jobs", "success_status": [200, 201, 202]},
+                "job_status": {"method": "GET", "path": "/jobs/{job_id}", "success_status": [200]},
+            },
+            "operations": {
+                "image_to_3d": {
+                    "required": ["version", "operation", "source", "requested_outputs"],
+                    "source_required": ["filename", "mime_type", "base64", "sha256"],
+                    "requested_outputs": ["mesh.glb", "provenance.json", "validation.json"],
+                },
+                "selection_edit": {
+                    "required": ["version", "instruction", "selection_context", "reference_images", "requested_outputs"],
+                    "requested_outputs": ["replacement.glb", "provenance.json", "validation.json"],
+                },
+            },
+            "job_response": {
+                "required": ["job_id", "status"],
+                "statuses": ["queued", "running", "completed", "failed", "cancelled"],
+                "mesh_output_keys": ["glb_url", "mesh_url", "output_url", "glb_path", "mesh_path", "output", "outputs", "result"],
+            },
+        }
+
+    @staticmethod
+    def source_presets() -> dict:
+        return {"version": 1, "presets": SOURCE_PRESETS}
 
     def chatgpt_auth(self) -> dict:
         return codex_auth_status(self.settings.get("codex_executable", "codex"))
@@ -108,7 +187,7 @@ class GlyphService:
         context = payload.get("context") or self.last_context
         if not context:
             raise ValueError("Select mesh context before sending a TRELLIS job")
-        return TrellisClient(self.settings.get("trellis_endpoint", "")).submit(
+        return self.trellis_client().submit(
             payload.get("instruction", ""), context, payload.get("references", [])
         )
 
@@ -117,7 +196,7 @@ class GlyphService:
         locked = state["source"].get("locked")
         if state["stage"] != "MESH" or not locked:
             raise RuntimeError("Lock the source before starting TRELLIS")
-        response = TrellisClient(self.settings.get("trellis_endpoint", "")).meshify(locked)
+        response = self.trellis_client().meshify(locked)
         job = {
             **response,
             "job_id": response.get("job_id") or response.get("id"),
@@ -129,7 +208,7 @@ class GlyphService:
         return job
 
     def mesh_job_status(self, job_id: str) -> dict:
-        job = TrellisClient(self.settings.get("trellis_endpoint", "")).status(job_id)
+        job = self.trellis_client().status(job_id)
         job = {**job, "job_id": job.get("job_id") or job.get("id") or job_id}
         self.project.update_mesh_job(job)
         return job
@@ -195,6 +274,10 @@ class Handler(BaseHTTPRequestHandler):
             self._require_authorization()
             if path == "/api/health":
                 self._json({"ok": True, "blender": self.service.blender.available()})
+            elif path == "/api/trellis/contract":
+                self._json(self.service.trellis_contract())
+            elif path == "/api/source/presets":
+                self._json(self.service.source_presets())
             elif path == "/api/scene":
                 self._json(self.service.scene())
             elif path == "/api/settings":
@@ -284,6 +367,11 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("GLYPH_API_HOST", "127.0.0.1"),
+        help="Interface to listen on (use 0.0.0.0 for LAN access)",
+    )
     parser.add_argument("--port", type=int, default=47831)
     parser.add_argument("--project-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument(
@@ -294,8 +382,8 @@ def main():
     args = parser.parse_args()
     service = GlyphService(args.project_root.resolve(), args.workspace.expanduser().resolve())
     Handler.service = service
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
-    print(f"GLYPH_API_READY=http://127.0.0.1:{args.port}", flush=True)
+    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    print(f"GLYPH_API_READY=http://{args.host}:{args.port}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
