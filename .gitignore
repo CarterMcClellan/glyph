@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.blend1
+*.blend2
+.DS_Store
+.idea/
+.vscode/
+jobs/
+dist/
+build/
+*.zip
