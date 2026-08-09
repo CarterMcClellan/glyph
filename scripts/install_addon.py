@@ -15,6 +15,6 @@ if TARGET.exists():
     shutil.rmtree(TARGET)
 shutil.copytree(SOURCE, TARGET)
 addon_utils.modules_refresh()
-addon_utils.enable("blender_ai_editor", default_set=True, persistent=True)
+bpy.ops.preferences.addon_enable(module="blender_ai_editor")
 bpy.ops.wm.save_userpref()
 print(f"GLYPH_INSTALLED={TARGET}")

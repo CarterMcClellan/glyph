@@ -14,7 +14,8 @@ source objects in a hidden `AI_EDIT_BACKUP_*` collection.
 
 ## Install
 
-Glyph requires Blender 4.0 or newer. From a clone of this repository:
+Glyph requires Blender 5.0 or newer and is currently tested against Blender 5.0.1. From a clone of
+this repository:
 
 ```bash
 blender --background --python scripts/install_addon.py
@@ -22,6 +23,15 @@ blender --background --python scripts/install_addon.py
 
 Restart an already-running Blender instance after installation. The offline planner has no external
 dependencies. Codex and TRELLIS.2 are optional integrations.
+
+As of August 2026, Blender Foundation does not publish an ARM64 Linux archive alongside its Linux
+x86-64 build. The included container definition provides the native Ubuntu ARM64 Blender 5.0.1
+package used by Glyph's development machine:
+
+```bash
+docker build --platform linux/arm64 -f docker/blender-arm64.Dockerfile \
+  -t glyph-blender:5.0.1-arm64 .
+```
 
 ## Use it
 

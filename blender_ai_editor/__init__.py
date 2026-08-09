@@ -1,8 +1,8 @@
 bl_info = {
     "name": "Glyph",
     "author": "Carter McClellan",
-    "version": (0, 1, 0),
-    "blender": (4, 0, 0),
+    "version": (0, 1, 1),
+    "blender": (5, 0, 0),
     "location": "3D Viewport > Sidebar > Glyph",
     "description": "Selection + language + image references with recoverable mesh previews",
     "category": "3D View",
